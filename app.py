@@ -694,19 +694,233 @@ if st.sidebar.button("🚪 Sair", use_container_width=True):
   
 
 if pagina == "Dashboard":
-	cs, ds = clientes(), demandas()
-	abertos = [x for x in ds if x[0].status != "Concluído"]
-	st.title("📊 Dashboard")
-	a, b, c, d = st.columns(4)
-	a.metric("Clientes cadastrados", len(cs))
-	b.metric("Demandas abertas", len(abertos))
-	c.metric("Demandas concluídas", len(ds) - len(abertos))
-	d.metric("Responsáveis", len(set(x.responsavel for x in cs)))
-	st.subheader("Demandas em aberto")
-	if not abertos:
-		st.info("Não existem demandas abertas.")
-	for demanda, cliente in abertos[:5]:
-		st.write(f"**{demanda.titulo}** — {cliente.nome if cliente else 'Cliente não encontrado'} — {demanda.status}")
+    cs, ds = clientes(), demandas()
+
+    # =========================
+    # DADOS DO DASHBOARD
+    # =========================
+
+    # Demandas
+    abertos = [x for x in ds if x[0].status != "Concluído"]
+    concluidas = [x for x in ds if x[0].status == "Concluído"]
+
+    # Responsáveis dos clientes
+    responsaveis = set(
+    x.responsavel
+    for x in cs
+    if x.responsavel
+ )
+    # Publicações
+    publicacoes = []
+    try:
+        with SessionLocal() as db:
+            publicacoes = db.query(ControlePublicacao).all()
+    except Exception:
+        publicacoes = []
+
+    publicadas = [
+        p for p in publicacoes
+        if getattr(p, "publicado", False)
+    ]
+
+    pendentes = [
+        p for p in publicacoes
+        if not getattr(p, "publicado", False)
+    ]
+
+    # Relatórios de avaliação
+    avaliacoes = []
+    try:
+        with SessionLocal() as db:
+            avaliacoes = db.query(RelatorioAvaliacao).all()
+    except Exception:
+        avaliacoes = []
+
+    # Almoxarifados
+    almox = []
+    try:
+        with SessionLocal() as db:
+            almox = db.query(Almoxarifado).all()
+    except Exception:
+        almox = []
+
+    # =========================
+    # TÍTULO
+    # =========================
+
+    st.title("📊 Dashboard Executivo")
+    st.caption("Visão geral do Facilita Manager")
+
+    # =========================
+    # INDICADORES PRINCIPAIS
+    # =========================
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric(
+            "👥 Clientes",
+            len(cs)
+        )
+
+    with col2:
+        st.metric(
+            "📢 Publicações realizadas",
+            len(publicadas)
+        )
+
+    with col3:
+        st.metric(
+            "⏳ Publicações pendentes",
+            len(pendentes)
+        )
+
+    with col4:
+        st.metric(
+            "📝 Demandas abertas",
+            len(abertos)
+        )
+
+    st.divider()
+
+    # =========================
+    # SEGUNDA LINHA
+    # =========================
+
+    col5, col6, col7, col8 = st.columns(4)
+
+    with col5:
+        st.metric(
+            "📄 Avaliações",
+            len(avaliacoes)
+        )
+
+    with col6:
+        st.metric(
+            "📦 Almoxarifados",
+            len(almox)
+        )
+
+    with col7:
+        st.metric(
+            "✅ Demandas concluídas",
+            len(concluidas)
+        )
+
+    with col8:
+        st.metric(
+            "👤 Responsáveis",
+            len(responsaveis)
+        )
+
+    st.divider()
+
+    # =========================
+    # PUBLICAÇÕES
+    # =========================
+
+    st.subheader("📢 Controle de Publicações")
+
+    pub1, pub2, pub3 = st.columns(3)
+
+    with pub1:
+        st.metric(
+            "Total",
+            len(publicacoes)
+        )
+
+    with pub2:
+        st.metric(
+            "Publicadas",
+            len(publicadas)
+        )
+
+    with pub3:
+        st.metric(
+            "Pendentes",
+            len(pendentes)
+        )
+
+    if pendentes:
+        st.warning(
+            f"⚠️ Existem {len(pendentes)} publicação(ões) pendente(s)."
+        )
+    else:
+        st.success(
+            "✅ Todas as publicações cadastradas estão concluídas."
+        )
+
+    # =========================
+    # DEMANDAS
+    # =========================
+
+    st.subheader("📝 Demandas")
+
+    if not ds:
+        st.info("Não existem demandas cadastradas.")
+    else:
+        for demanda, cliente in abertos[:5]:
+            nome_cliente = (
+                cliente.nome
+                if cliente
+                else "Cliente não encontrado"
+            )
+
+            prioridade = getattr(
+                demanda,
+                "prioridade",
+                ""
+            )
+
+            prazo = getattr(
+                demanda,
+                "prazo",
+                None
+            )
+
+            st.write(
+                f"**{demanda.titulo}** — {nome_cliente}"
+            )
+
+            detalhes = []
+
+            if prioridade:
+                detalhes.append(
+                    f"Prioridade: {prioridade}"
+                )
+
+            if prazo:
+                detalhes.append(
+                    f"Prazo: {prazo}"
+                )
+
+            if detalhes:
+                st.caption(" | ".join(detalhes))
+
+        if len(abertos) > 5:
+            st.caption(
+                f"Mostrando 5 de {len(abertos)} demandas abertas."
+            )
+
+    # =========================
+    # RESUMO FINAL
+    # =========================
+
+    st.divider()
+
+    st.subheader("📌 Resumo")
+
+    resumo1, resumo2 = st.columns(2)
+
+    with resumo1:
+        st.write("**Clientes cadastrados:**", len(cs))
+        st.write("**Responsáveis:**", len(responsaveis))
+        st.write("**Almoxarifados:**", len(almox))
+
+    with resumo2:
+        st.write("**Publicações pendentes:**", len(pendentes))
+        st.write("**Demandas abertas:**", len(abertos))
+        st.write("**Demandas concluídas:**", len(concluidas)) 
 
 elif pagina == "Clientes":
 	st.title("👥 Clientes")
