@@ -525,6 +525,25 @@ Base.metadata.create_all(bind=engine)
 RESPONSAVEIS = ["Vitor", "Ítalo", "Jadsson", "Álvaro Vinícius", "Não definido"]
 STATUS = ["A Fazer", "Em Andamento", "Aguardando Cliente", "Concluído"]
 
+# =========================================================
+# CONTROLE DE PUBLICAÇÕES — PERIODICIDADES
+# =========================================================
+PERIODICIDADES_PUBLICACAO = {
+    "RREO — Relatório Resumido da Execução Orçamentária": [
+        "1º Bimestre", "2º Bimestre", "3º Bimestre",
+        "4º Bimestre", "5º Bimestre", "6º Bimestre",
+    ],
+    "RGF — Relatório de Gestão Fiscal": [
+        "1º Quadrimestre", "2º Quadrimestre", "3º Quadrimestre",
+    ],
+    "RCI — Relatório de Controle Interno": [
+        "1º Trimestre", "2º Trimestre", "3º Trimestre", "4º Trimestre",
+    ],
+    "RGA — Relatório de Gestão Anual": ["Anual"],
+    "Balanço Geral": ["Anual"],
+}
+
+
 
 def clientes():
 	with SessionLocal() as db:
@@ -699,22 +718,35 @@ if pagina == "Dashboard":
     # =========================
     # DADOS DO DASHBOARD
     # =========================
-
-    # Demandas
     abertos = [x for x in ds if x[0].status != "Concluído"]
     concluidas = [x for x in ds if x[0].status == "Concluído"]
 
-    # Responsáveis dos clientes
-    responsaveis = set(
-    x.responsavel
-    for x in cs
-    if x.responsavel
- )
-    # Publicações
+    responsaveis = {
+        x.responsavel
+        for x in cs
+        if x.responsavel
+    }
+
+    ano_dashboard = st.selectbox(
+        "📅 Ano do controle de publicações",
+        list(range(date.today().year - 2, date.today().year + 3)),
+        index=2,
+        key="ano_dashboard",
+    )
+
+    # =========================
+    # PUBLICAÇÕES
+    # =========================
     publicacoes = []
     try:
         with SessionLocal() as db:
-            publicacoes = db.query(ControlePublicacao).all()
+            publicacoes = (
+                db.query(ControlePublicacao)
+                .filter(
+                    ControlePublicacao.ano == int(ano_dashboard)
+                )
+                .all()
+            )
     except Exception:
         publicacoes = []
 
@@ -723,12 +755,28 @@ if pagina == "Dashboard":
         if getattr(p, "publicado", False)
     ]
 
-    pendentes = [
-        p for p in publicacoes
-        if not getattr(p, "publicado", False)
-    ]
+    total_periodos = sum(
+        len(periodos)
+        for periodos in PERIODICIDADES_PUBLICACAO.values()
+    )
 
-    # Relatórios de avaliação
+    total_previsto = len(cs) * total_periodos
+
+    total_publicado = len({
+        (
+            p.cliente_id,
+            p.tipo_relatorio,
+            p.periodo,
+            p.ano,
+        )
+        for p in publicadas
+    })
+
+    total_pendente = max(total_previsto - total_publicado, 0)
+
+    # =========================
+    # RELATÓRIOS DE AVALIAÇÃO
+    # =========================
     avaliacoes = []
     try:
         with SessionLocal() as db:
@@ -736,7 +784,9 @@ if pagina == "Dashboard":
     except Exception:
         avaliacoes = []
 
-    # Almoxarifados
+    # =========================
+    # ALMOXARIFADOS
+    # =========================
     almox = []
     try:
         with SessionLocal() as db:
@@ -747,113 +797,93 @@ if pagina == "Dashboard":
     # =========================
     # TÍTULO
     # =========================
-
     st.title("📊 Dashboard Executivo")
     st.caption("Visão geral do Facilita Manager")
 
     # =========================
     # INDICADORES PRINCIPAIS
     # =========================
-
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric(
-            "👥 Clientes",
-            len(cs)
-        )
+        st.metric("👥 Clientes", len(cs))
 
     with col2:
-        st.metric(
-            "📢 Publicações realizadas",
-            len(publicadas)
-        )
+        st.metric("📢 Publicações realizadas", total_publicado)
 
     with col3:
-        st.metric(
-            "⏳ Publicações pendentes",
-            len(pendentes)
-        )
+        st.metric("⏳ Publicações pendentes", total_pendente)
 
     with col4:
-        st.metric(
-            "📝 Demandas abertas",
-            len(abertos)
-        )
+        st.metric("📝 Demandas abertas", len(abertos))
 
     st.divider()
-
-    # =========================
-    # SEGUNDA LINHA
-    # =========================
 
     col5, col6, col7, col8 = st.columns(4)
 
     with col5:
-        st.metric(
-            "📄 Avaliações",
-            len(avaliacoes)
-        )
+        st.metric("📄 Avaliações", len(avaliacoes))
 
     with col6:
-        st.metric(
-            "📦 Almoxarifados",
-            len(almox)
-        )
+        st.metric("📦 Almoxarifados", len(almox))
 
     with col7:
-        st.metric(
-            "✅ Demandas concluídas",
-            len(concluidas)
-        )
+        st.metric("✅ Demandas concluídas", len(concluidas))
 
     with col8:
-        st.metric(
-            "👤 Responsáveis",
-            len(responsaveis)
-        )
+        st.metric("👤 Responsáveis", len(responsaveis))
 
     st.divider()
 
     # =========================
-    # PUBLICAÇÕES
+    # PAINEL DE PUBLICAÇÕES
     # =========================
+    st.subheader(
+        f"📢 Controle de Publicações — {int(ano_dashboard)}"
+    )
 
-    st.subheader("📢 Controle de Publicações")
+    st.caption(
+        "A situação é calculada considerando todos os períodos "
+        "configurados para cada tipo de relatório."
+    )
 
-    pub1, pub2, pub3 = st.columns(3)
+    for tipo_relatorio, periodos in PERIODICIDADES_PUBLICACAO.items():
+        publicados_tipo = {
+            (p.cliente_id, p.periodo)
+            for p in publicacoes
+            if p.tipo_relatorio == tipo_relatorio
+            and p.publicado
+        }
 
-    with pub1:
-        st.metric(
-            "Total",
-            len(publicacoes)
-        )
+        previstos_tipo = len(cs) * len(periodos)
+        realizados_tipo = len(publicados_tipo)
+        pendentes_tipo = max(previstos_tipo - realizados_tipo, 0)
 
-    with pub2:
-        st.metric(
-            "Publicadas",
-            len(publicadas)
-        )
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([5, 1.5, 1.5])
 
-    with pub3:
-        st.metric(
-            "Pendentes",
-            len(pendentes)
-        )
+            with c1:
+                st.markdown(f"**{tipo_relatorio}**")
+                st.caption(
+                    f"Períodos: {', '.join(periodos)}"
+                )
 
-    if pendentes:
-        st.warning(
-            f"⚠️ Existem {len(pendentes)} publicação(ões) pendente(s)."
-        )
-    else:
-        st.success(
-            "✅ Todas as publicações cadastradas estão concluídas."
-        )
+            with c2:
+                st.metric("Publicados", realizados_tipo)
+
+            with c3:
+                st.metric("Pendentes", pendentes_tipo)
+
+    st.info(
+        "ℹ️ 'Pendente' significa que ainda não existe uma marcação "
+        "de publicação para aquela combinação cliente + relatório + período. "
+        "O sistema não classifica como 'atrasado' sem uma data de vencimento "
+        "configurada, evitando inventar prazos legais."
+    )
 
     # =========================
     # DEMANDAS
     # =========================
-
     st.subheader("📝 Demandas")
 
     if not ds:
@@ -866,17 +896,8 @@ if pagina == "Dashboard":
                 else "Cliente não encontrado"
             )
 
-            prioridade = getattr(
-                demanda,
-                "prioridade",
-                ""
-            )
-
-            prazo = getattr(
-                demanda,
-                "prazo",
-                None
-            )
+            prioridade = getattr(demanda, "prioridade", "")
+            prazo = getattr(demanda, "prazo", None)
 
             st.write(
                 f"**{demanda.titulo}** — {nome_cliente}"
@@ -885,13 +906,11 @@ if pagina == "Dashboard":
             detalhes = []
 
             if prioridade:
-                detalhes.append(
-                    f"Prioridade: {prioridade}"
-                )
+                detalhes.append(f"Prioridade: {prioridade}")
 
             if prazo:
                 detalhes.append(
-                    f"Prazo: {prazo}"
+                    f"Prazo: {prazo.strftime('%d/%m/%Y')}"
                 )
 
             if detalhes:
@@ -905,9 +924,7 @@ if pagina == "Dashboard":
     # =========================
     # RESUMO FINAL
     # =========================
-
     st.divider()
-
     st.subheader("📌 Resumo")
 
     resumo1, resumo2 = st.columns(2)
@@ -918,9 +935,11 @@ if pagina == "Dashboard":
         st.write("**Almoxarifados:**", len(almox))
 
     with resumo2:
-        st.write("**Publicações pendentes:**", len(pendentes))
+        st.write("**Publicações previstas:**", total_previsto)
+        st.write("**Publicações realizadas:**", total_publicado)
+        st.write("**Publicações pendentes:**", total_pendente)
         st.write("**Demandas abertas:**", len(abertos))
-        st.write("**Demandas concluídas:**", len(concluidas)) 
+        st.write("**Demandas concluídas:**", len(concluidas))
 
 elif pagina == "Clientes":
 	st.title("👥 Clientes")
@@ -3674,6 +3693,6 @@ elif pagina == "Configurações":
     st.divider()
 
     st.write("**Sistema:** Facilita Manager")
-    st.write("**Tecnologia:** Python + Streamlit + SQLite")
+    st.write("**Tecnologia:** Python + Streamlit + SQLAlchemy + Supabase")
     st.write("**Versão:** 0.2.0")
 
