@@ -2893,54 +2893,28 @@ elif pagina == "Controle de Publicações":
     )
 
     # ---------------------------------------------------------
-    # CONFIGURAÇÃO DOS RELATÓRIOS E SUAS PERIODICIDADES
+    # PERIODICIDADES DOS RELATÓRIOS
     # ---------------------------------------------------------
-
-    PERIODICIDADES_PUBLICACAO = {
-        "RREO — Relatório Resumido da Execução Orçamentária": [
-            "1º Bimestre",
-            "2º Bimestre",
-            "3º Bimestre",
-            "4º Bimestre",
-            "5º Bimestre",
-            "6º Bimestre",
-        ],
-        "RGF — Relatório de Gestão Fiscal": [
-            "1º Quadrimestre",
-            "2º Quadrimestre",
-            "3º Quadrimestre",
-        ],
-        "RCI — Relatório de Controle Interno": [
-            "1º Trimestre",
-            "2º Trimestre",
-            "3º Trimestre",
-            "4º Trimestre",
-        ],
-        "RGA — Relatório de Gestão Anual": [
-            "Anual",
-        ],
-        "Balanço Geral": [
-            "Anual",
-        ],
-    }
+    # A configuração fica centralizada no início do aplicativo,
+    # mas usamos a mesma estrutura aqui para facilitar a leitura.
+    periodicidades = PERIODICIDADES_PUBLICACAO
 
     # ---------------------------------------------------------
-    # FILTROS / SELEÇÃO DO CONTROLE
+    # FILTROS / SELEÇÃO
     # ---------------------------------------------------------
-
     col1, col2, col3 = st.columns([3, 2, 1.5])
 
     with col1:
         tipo_relatorio_publicacao = st.selectbox(
             "📄 Relatório",
-            list(PERIODICIDADES_PUBLICACAO.keys()),
+            list(periodicidades.keys()),
             key="tipo_relatorio_publicacao",
         )
 
     with col2:
         periodo_publicacao = st.selectbox(
             "📅 Período",
-            PERIODICIDADES_PUBLICACAO[tipo_relatorio_publicacao],
+            periodicidades[tipo_relatorio_publicacao],
             key="periodo_publicacao",
         )
 
@@ -2971,9 +2945,8 @@ elif pagina == "Controle de Publicações":
         )
 
     # ---------------------------------------------------------
-    # CLIENTES VISÍVEIS DE ACORDO COM O PERFIL
+    # CLIENTES E REGISTROS
     # ---------------------------------------------------------
-
     perfil_atual = st.session_state.get("perfil_usuario", "")
     nome_usuario_atual = st.session_state.get("nome_usuario", "")
 
@@ -2997,11 +2970,10 @@ elif pagina == "Controle de Publicações":
             .all()
         )
 
+    # Publicadores enxergam apenas sua carteira.
     if perfil_atual == "Publicador":
         responsaveis_permitidos = {nome_usuario_atual}
 
-        # Compatibilidade com carteiras antigas que podem estar
-        # cadastradas como "Jadsson News" em vez de "Jadsson".
         if nome_usuario_atual == "Jadsson":
             responsaveis_permitidos.add("Jadsson News")
 
@@ -3032,10 +3004,10 @@ elif pagina == "Controle de Publicações":
     }
 
     # ---------------------------------------------------------
-    # CABEÇALHO / RESUMO
+    # RESUMO
     # ---------------------------------------------------------
-
     total_clientes = len(clientes_publicacao)
+
     total_publicados = sum(
         1
         for cliente in clientes_publicacao
@@ -3044,12 +3016,26 @@ elif pagina == "Controle de Publicações":
             and registros_por_cliente[cliente.id].publicado
         )
     )
+
     total_pendentes = total_clientes - total_publicados
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Clientes", total_clientes)
+    percentual = (
+        (total_publicados / total_clientes) * 100
+        if total_clientes
+        else 0
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+
+    m1.metric("👥 Clientes", total_clientes)
     m2.metric("✅ Publicados", total_publicados)
     m3.metric("⏳ Pendentes", total_pendentes)
+    m4.metric("📊 Conclusão", f"{percentual:.0f}%")
+
+    st.progress(
+        int(percentual),
+        text=f"{percentual:.0f}% concluído",
+    )
 
     st.markdown(
         f"### {tipo_relatorio_publicacao} — "
@@ -3057,14 +3043,13 @@ elif pagina == "Controle de Publicações":
     )
 
     st.info(
-        "Marque o campo **OK** depois que o relatório daquele cliente "
-        "for efetivamente publicado. A marcação fica salva no banco de dados."
+        "Marque **OK** depois que o relatório daquele cliente "
+        "for efetivamente publicado. Depois clique em **Salvar marcações**."
     )
 
     # ---------------------------------------------------------
     # AÇÕES EM MASSA
     # ---------------------------------------------------------
-
     acao1, acao2, acao3 = st.columns([1.6, 1.6, 4])
 
     chave_base_publicacao = (
@@ -3076,12 +3061,14 @@ elif pagina == "Controle de Publicações":
         marcar_todos = st.button(
             "✅ Marcar todos",
             use_container_width=True,
+            key="marcar_todos_publicacao",
         )
 
     with acao2:
         desmarcar_todos = st.button(
             "⬜ Desmarcar todos",
             use_container_width=True,
+            key="desmarcar_todos_publicacao",
         )
 
     if marcar_todos:
@@ -3097,9 +3084,8 @@ elif pagina == "Controle de Publicações":
             ] = False
 
     # ---------------------------------------------------------
-    # TABELA DE CONTROLE
+    # TABELA
     # ---------------------------------------------------------
-
     st.divider()
 
     if not clientes_publicacao:
@@ -3107,15 +3093,16 @@ elif pagina == "Controle de Publicações":
             "Nenhum cliente encontrado com os filtros selecionados."
         )
     else:
-        larguras_publicacao = [0.45, 4.8, 2.0, 1.1]
+        larguras_publicacao = [0.45, 4.2, 2.0, 1.0, 1.5]
 
         cabecalho = st.columns(larguras_publicacao)
 
         cabecalhos_publicacao = [
             "Nº",
-            "CLIENTES",
+            "CLIENTE",
             "RESPONSÁVEL",
             "OK",
+            "DATA",
         ]
 
         for coluna, titulo in zip(
@@ -3128,8 +3115,6 @@ elif pagina == "Controle de Publicações":
                     unsafe_allow_html=True,
                 )
 
-        # Os valores são lidos do banco para iniciar cada checkbox.
-        # Depois, o usuário pode marcar/desmarcar e salvar tudo de uma vez.
         for numero, cliente in enumerate(
             clientes_publicacao,
             start=1,
@@ -3173,6 +3158,23 @@ elif pagina == "Controle de Publicações":
                     key=chave_checkbox,
                     label_visibility="collapsed",
                 )
+
+            with linha[4]:
+                if registro and registro.publicado:
+                    data_texto = (
+                        registro.data_publicacao.strftime("%d/%m/%Y")
+                        if registro.data_publicacao
+                        else "—"
+                    )
+                    st.markdown(
+                        f'<div class="publicacao-cell">{data_texto}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        '<div class="publicacao-cell">—</div>',
+                        unsafe_allow_html=True,
+                    )
 
         st.divider()
 
@@ -3231,29 +3233,51 @@ elif pagina == "Controle de Publicações":
                             ),
                         )
                         db.add(registro)
+
                     else:
                         registro.publicado = publicado
-                        registro.data_publicacao = (
-                            data_atual
-                            if publicado
-                            else None
-                        )
+
+                        if publicado:
+                            # Mantém a data original quando já publicada.
+                            if not registro.data_publicacao:
+                                registro.data_publicacao = data_atual
+                        else:
+                            registro.data_publicacao = None
 
                     salvos += 1
 
                 db.commit()
 
             st.success(
-                f"Controle atualizado para {salvos} cliente(s)."
+                f"✅ Controle atualizado para {salvos} cliente(s)."
             )
             st.rerun()
 
         # -----------------------------------------------------
-        # DETALHES DOS REGISTROS JÁ SALVOS
+        # SITUAÇÃO ATUAL
         # -----------------------------------------------------
-
         st.divider()
         st.subheader("📌 Situação atual")
+
+        situacao1, situacao2 = st.columns(2)
+
+        with situacao1:
+            if total_publicados:
+                st.success(
+                    f"✅ {total_publicados} cliente(s) com publicação concluída."
+                )
+            else:
+                st.info("Nenhuma publicação marcada como concluída.")
+
+        with situacao2:
+            if total_pendentes:
+                st.warning(
+                    f"⏳ {total_pendentes} cliente(s) ainda pendente(s)."
+                )
+            else:
+                st.success(
+                    "🎉 Todos os clientes deste filtro estão publicados."
+                )
 
         for cliente in clientes_publicacao:
             registro = registros_por_cliente.get(cliente.id)
@@ -3264,10 +3288,10 @@ elif pagina == "Controle de Publicações":
                     if registro.data_publicacao
                     else "Data não informada"
                 )
+
                 st.success(
                     f"✅ {cliente.nome} — publicado em {data_texto}"
                 )
-
 
 
 elif pagina == "Almoxarifados":
