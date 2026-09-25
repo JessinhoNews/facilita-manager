@@ -1,3 +1,4 @@
+from pathlib import Path
 from io import BytesIO
 import streamlit as st
 from datetime import date
@@ -152,6 +153,33 @@ st.markdown(
             font-size: 0.95rem;
         }
 
+        .publicacao-header {
+            background: #d9e2f3;
+            border: 1px solid #8c8c8c;
+            padding: 8px 6px;
+            text-align: center;
+            font-weight: 700;
+            font-size: 12px;
+        }
+
+        .publicacao-cell {
+            border: 1px solid #b7b7b7;
+            padding: 8px 7px;
+            min-height: 34px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+        }
+
+        .publicacao-cell.numero {
+            justify-content: center;
+            font-weight: 700;
+        }
+
+        .publicacao-cell.cliente {
+            font-weight: 600;
+        }
+
         /* Cartões personalizados */
         .cartao-facilita {
             background-color: white;
@@ -276,10 +304,18 @@ def tela_login():
 
     with centro:
 
-        st.image(
-            "assets/logo-facilita.png",
-            use_container_width=True,
-        )
+        BASE_DIR = Path(__file__).resolve().parent
+        LOGO_PATH = BASE_DIR / "assets" / "logo-facilita.png"
+
+        if LOGO_PATH.exists():
+            st.image(
+                str(LOGO_PATH),
+                use_container_width=True,
+            )
+        else:
+            st.warning(
+                "Logo não encontrada em assets/logo-facilita.png"
+            )
 
         st.markdown(
             '<div class="login-titulo">'
@@ -331,25 +367,29 @@ def tela_login():
                 st.error(
                     "Usuário ou senha incorretos."
                 )
-# Banco de dados persistente no Supabase/PostgreSQL
-DATABASE_URL = st.secrets.get("DATABASE_URL")
+import streamlit as st
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
+
+import os
+
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
-    st.error("DATABASE_URL não está configurado nos Secrets do Streamlit.")
-    st.stop()
-
-# Compatibilidade caso a URL venha como postgres://
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
-elif DATABASE_URL.startswith("postgresql://"):
-    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+    DATABASE_URL = "sqlite:///facilita.db"
 
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True,
+    pool_pre_ping=True
 )
+
 Base = declarative_base()
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False
+)
 
 
 class Cliente(Base):
@@ -410,7 +450,51 @@ class RelatorioAvaliacao(Base):
     serie_historica = Column(String(50))
 
     observacoes = Column(Text)
+# =========================================================
+# CONTROLE DE PUBLICAÇÕES
+# =========================================================
 
+class ControlePublicacao(Base):
+    __tablename__ = "controle_publicacoes"
+
+    id = Column(Integer, primary_key=True)
+
+    cliente_id = Column(
+        Integer,
+        ForeignKey("clientes.id"),
+        nullable=False
+    )
+
+    tipo_relatorio = Column(
+        String(100),
+        nullable=False
+    )
+
+    periodo = Column(
+        String(50),
+        nullable=False
+    )
+
+    ano = Column(
+        Integer,
+        nullable=False
+    )
+
+    publicado = Column(
+        Boolean,
+        default=False,
+        nullable=False
+    )
+
+    data_publicacao = Column(
+        Date,
+        nullable=True
+    )
+
+    observacao = Column(
+        Text,
+        nullable=True
+    )
 
 class Almoxarifado(Base):
     __tablename__ = "almoxarifados"
@@ -436,24 +520,14 @@ class Almoxarifado(Base):
     dez = Column(String(10), default="")
 
 
-class ControlePublicacao(Base):
-    __tablename__ = "controle_publicacoes"
-
-    id = Column(Integer, primary_key=True)
-    cliente_id = Column(Integer, ForeignKey("clientes.id"), nullable=False)
-    tipo_relatorio = Column(String(100), nullable=False)
-    periodo = Column(String(50), nullable=False)
-    ano = Column(Integer, nullable=False)
-    publicado = Column(Boolean, default=False, nullable=False)
-    data_publicacao = Column(Date, nullable=True)
-    observacao = Column(Text, nullable=True)
-
-
 Base.metadata.create_all(bind=engine)
 
 RESPONSAVEIS = ["Vitor", "Ítalo", "Jadsson", "Álvaro Vinícius", "Não definido"]
 STATUS = ["A Fazer", "Em Andamento", "Aguardando Cliente", "Concluído"]
 
+# =========================================================
+# CONTROLE DE PUBLICAÇÕES — PERIODICIDADES
+# =========================================================
 PERIODICIDADES_PUBLICACAO = {
     "RREO — Relatório Resumido da Execução Orçamentária": [
         "1º Bimestre", "2º Bimestre", "3º Bimestre",
@@ -468,6 +542,7 @@ PERIODICIDADES_PUBLICACAO = {
     "RGA — Relatório de Gestão Anual": ["Anual"],
     "Balanço Geral": ["Anual"],
 }
+
 
 
 def clientes():
@@ -638,227 +713,233 @@ if st.sidebar.button("🚪 Sair", use_container_width=True):
   
 
 if pagina == "Dashboard":
-    st.title("📊 Dashboard")
-    st.caption("Visão geral da operação, demandas, carteiras e publicações.")
+    cs, ds = clientes(), demandas()
 
-    perfil = st.session_state.get("perfil_usuario", "")
-    nome_usuario = st.session_state.get("nome_usuario", "")
-    hoje = date.today()
+    # =========================
+    # DADOS DO DASHBOARD
+    # =========================
+    abertos = [x for x in ds if x[0].status != "Concluído"]
+    concluidas = [x for x in ds if x[0].status == "Concluído"]
 
-    # ---------------------------------------------------------
-    # FILTROS DO DASHBOARD
-    # ---------------------------------------------------------
-    cs_todos = clientes()
+    responsaveis = {
+        x.responsavel
+        for x in cs
+        if x.responsavel
+    }
 
-    if perfil == "Publicador":
-        responsaveis_dashboard = [nome_usuario]
-        clientes_dashboard = [
-            c for c in cs_todos if c.responsavel == nome_usuario
-        ]
-    else:
-        responsaveis_dashboard = ["Todos"] + sorted({
-            c.responsavel for c in cs_todos if c.responsavel
-        })
-        filtro_resp_dashboard = st.selectbox(
-            "👤 Responsável pela carteira",
-            responsaveis_dashboard,
-            key="dashboard_responsavel",
-        )
-        if filtro_resp_dashboard == "Todos":
-            clientes_dashboard = cs_todos
-        else:
-            clientes_dashboard = [
-                c for c in cs_todos
-                if c.responsavel == filtro_resp_dashboard
-            ]
+    ano_dashboard = st.selectbox(
+        "📅 Ano do controle de publicações",
+        list(range(date.today().year - 2, date.today().year + 3)),
+        index=2,
+        key="ano_dashboard",
+    )
 
-    if perfil == "Publicador":
-        st.info(f"Visualização da carteira de **{nome_usuario}**.")
+    # =========================
+    # PUBLICAÇÕES
+    # =========================
+    publicacoes = []
+    try:
+        with SessionLocal() as db:
+            publicacoes = (
+                db.query(ControlePublicacao)
+                .filter(
+                    ControlePublicacao.ano == int(ano_dashboard)
+                )
+                .all()
+            )
+    except Exception:
+        publicacoes = []
 
-    ids_clientes = {c.id for c in clientes_dashboard}
-
-    with SessionLocal() as db:
-        demandas_dashboard = (
-            db.query(Demanda)
-            .filter(Demanda.cliente_id.in_(ids_clientes) if ids_clientes else False)
-            .order_by(Demanda.id.desc())
-            .all()
-        )
-
-        publicacoes_dashboard = (
-            db.query(ControlePublicacao)
-            .filter(ControlePublicacao.ano == hoje.year)
-            .all()
-        )
-
-    # ---------------------------------------------------------
-    # INDICADORES PRINCIPAIS
-    # ---------------------------------------------------------
-    abertas = [d for d in demandas_dashboard if d.status != "Concluído"]
-    concluidas = [d for d in demandas_dashboard if d.status == "Concluído"]
-    atrasadas = [
-        d for d in abertas
-        if d.prazo and d.prazo < hoje
-    ]
-    vencendo_7 = [
-        d for d in abertas
-        if d.prazo and hoje <= d.prazo <= hoje.fromordinal(hoje.toordinal() + 7)
+    publicadas = [
+        p for p in publicacoes
+        if getattr(p, "publicado", False)
     ]
 
-    responsaveis_ativos = len({
-        c.responsavel for c in clientes_dashboard if c.responsavel
+    total_periodos = sum(
+        len(periodos)
+        for periodos in PERIODICIDADES_PUBLICACAO.values()
+    )
+
+    total_previsto = len(cs) * total_periodos
+
+    total_publicado = len({
+        (
+            p.cliente_id,
+            p.tipo_relatorio,
+            p.periodo,
+            p.ano,
+        )
+        for p in publicadas
     })
 
-    m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("👥 Clientes", len(clientes_dashboard))
-    m2.metric("📋 Demandas abertas", len(abertas))
-    m3.metric("🚨 Atrasadas", len(atrasadas))
-    m4.metric("✅ Concluídas", len(concluidas))
-    m5.metric("👤 Responsáveis", responsaveis_ativos)
-
-    st.divider()
-
-    # ---------------------------------------------------------
-    # PUBLICAÇÕES DO ANO
-    # ---------------------------------------------------------
-    total_previsto = (
-        len(clientes_dashboard)
-        * sum(len(periodos) for periodos in PERIODICIDADES_PUBLICACAO.values())
-    )
-
-    ids_visiveis = ids_clientes
-    publicacoes_validas = [
-        p for p in publicacoes_dashboard
-        if p.cliente_id in ids_visiveis
-        and p.tipo_relatorio in PERIODICIDADES_PUBLICACAO
-        and p.periodo in PERIODICIDADES_PUBLICACAO[p.tipo_relatorio]
-    ]
-    total_publicado = sum(1 for p in publicacoes_validas if p.publicado)
     total_pendente = max(total_previsto - total_publicado, 0)
-    percentual_pub = (
-        total_publicado / total_previsto * 100
-        if total_previsto else 0
-    )
 
-    st.subheader(f"📋 Publicações — {hoje.year}")
-    p1, p2, p3, p4 = st.columns(4)
-    p1.metric("Previstas", total_previsto)
-    p2.metric("Publicadas", total_publicado)
-    p3.metric("Pendentes", total_pendente)
-    p4.metric("Conclusão", f"{percentual_pub:.0f}%")
-    st.progress(
-        int(min(percentual_pub, 100)),
-        text=f"{percentual_pub:.0f}% do controle anual concluído",
-    )
+    # =========================
+    # RELATÓRIOS DE AVALIAÇÃO
+    # =========================
+    avaliacoes = []
+    try:
+        with SessionLocal() as db:
+            avaliacoes = db.query(RelatorioAvaliacao).all()
+    except Exception:
+        avaliacoes = []
+
+    # =========================
+    # ALMOXARIFADOS
+    # =========================
+    almox = []
+    try:
+        with SessionLocal() as db:
+            almox = db.query(Almoxarifado).all()
+    except Exception:
+        almox = []
+
+    # =========================
+    # TÍTULO
+    # =========================
+    st.title("📊 Dashboard Executivo")
+    st.caption("Visão geral do Facilita Manager")
+
+    # =========================
+    # INDICADORES PRINCIPAIS
+    # =========================
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("👥 Clientes", len(cs))
+
+    with col2:
+        st.metric("📢 Publicações realizadas", total_publicado)
+
+    with col3:
+        st.metric("⏳ Publicações pendentes", total_pendente)
+
+    with col4:
+        st.metric("📝 Demandas abertas", len(abertos))
 
     st.divider()
 
-    # ---------------------------------------------------------
-    # ALERTAS E DEMANDAS RECENTES
-    # ---------------------------------------------------------
-    col_alertas, col_recentes = st.columns([1, 1.5])
+    col5, col6, col7, col8 = st.columns(4)
 
-    with col_alertas:
-        st.subheader("🔔 Alertas")
+    with col5:
+        st.metric("📄 Avaliações", len(avaliacoes))
 
-        if atrasadas:
-            st.error(f"🚨 {len(atrasadas)} demanda(s) atrasada(s).")
-            for d in atrasadas[:5]:
-                cliente = next((c for c in clientes_dashboard if c.id == d.cliente_id), None)
-                nome_cliente = cliente.nome if cliente else "Cliente não encontrado"
-                st.write(
-                    f"**{d.titulo}** — {nome_cliente} — "
-                    f"prazo {d.prazo.strftime('%d/%m/%Y')}"
+    with col6:
+        st.metric("📦 Almoxarifados", len(almox))
+
+    with col7:
+        st.metric("✅ Demandas concluídas", len(concluidas))
+
+    with col8:
+        st.metric("👤 Responsáveis", len(responsaveis))
+
+    st.divider()
+
+    # =========================
+    # PAINEL DE PUBLICAÇÕES
+    # =========================
+    st.subheader(
+        f"📢 Controle de Publicações — {int(ano_dashboard)}"
+    )
+
+    st.caption(
+        "A situação é calculada considerando todos os períodos "
+        "configurados para cada tipo de relatório."
+    )
+
+    for tipo_relatorio, periodos in PERIODICIDADES_PUBLICACAO.items():
+        publicados_tipo = {
+            (p.cliente_id, p.periodo)
+            for p in publicacoes
+            if p.tipo_relatorio == tipo_relatorio
+            and p.publicado
+        }
+
+        previstos_tipo = len(cs) * len(periodos)
+        realizados_tipo = len(publicados_tipo)
+        pendentes_tipo = max(previstos_tipo - realizados_tipo, 0)
+
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([5, 1.5, 1.5])
+
+            with c1:
+                st.markdown(f"**{tipo_relatorio}**")
+                st.caption(
+                    f"Períodos: {', '.join(periodos)}"
                 )
-        else:
-            st.success("Nenhuma demanda atrasada.")
 
-        if vencendo_7:
-            st.warning(f"⏰ {len(vencendo_7)} demanda(s) vencem nos próximos 7 dias.")
-        else:
-            st.info("Nenhuma demanda vencendo nos próximos 7 dias.")
+            with c2:
+                st.metric("Publicados", realizados_tipo)
 
-        if total_pendente:
-            st.warning(f"📋 {total_pendente} publicação(ões) ainda pendente(s) no ano.")
-        else:
-            st.success("🎉 Todas as publicações previstas estão concluídas.")
+            with c3:
+                st.metric("Pendentes", pendentes_tipo)
 
-    with col_recentes:
-        st.subheader("📌 Demandas em aberto")
-        if not abertas:
-            st.info("Não existem demandas abertas para os filtros selecionados.")
-        else:
-            for d in abertas[:8]:
-                cliente = next((c for c in clientes_dashboard if c.id == d.cliente_id), None)
-                nome_cliente = cliente.nome if cliente else "Cliente não encontrado"
-                prazo_txt = d.prazo.strftime("%d/%m/%Y") if d.prazo else "Sem prazo"
-                prioridade_icon = {"Alta": "🔴", "Média": "🟠", "Baixa": "🟢"}.get(d.prioridade, "⚪")
-                with st.container(border=True):
-                    st.markdown(f"**{d.titulo}**")
-                    st.caption(
-                        f"🏛️ {nome_cliente} · 👤 {d.responsavel} · "
-                        f"{prioridade_icon} {d.prioridade} · 📅 {prazo_txt}"
-                    )
-                    st.caption(f"Status: {d.status}")
+    st.info(
+        "ℹ️ 'Pendente' significa que ainda não existe uma marcação "
+        "de publicação para aquela combinação cliente + relatório + período. "
+        "O sistema não classifica como 'atrasado' sem uma data de vencimento "
+        "configurada, evitando inventar prazos legais."
+    )
 
-    st.divider()
+    # =========================
+    # DEMANDAS
+    # =========================
+    st.subheader("📝 Demandas")
 
-    # ---------------------------------------------------------
-    # CARTEIRA POR RESPONSÁVEL
-    # ---------------------------------------------------------
-    st.subheader("🗂️ Carteira por responsável")
-
-    if not clientes_dashboard:
-        st.info("Nenhum cliente encontrado para os filtros selecionados.")
+    if not ds:
+        st.info("Não existem demandas cadastradas.")
     else:
-        grupos = {}
-        for c in clientes_dashboard:
-            grupos.setdefault(c.responsavel or "Não definido", []).append(c)
-
-        for responsavel, grupo in sorted(grupos.items(), key=lambda x: x[0]):
-            demanda_grupo = [
-                d for d in demandas_dashboard
-                if d.cliente_id in {c.id for c in grupo}
-            ]
-            abertas_grupo = sum(1 for d in demanda_grupo if d.status != "Concluído")
-            atrasadas_grupo = sum(
-                1 for d in demanda_grupo
-                if d.status != "Concluído" and d.prazo and d.prazo < hoje
+        for demanda, cliente in abertos[:5]:
+            nome_cliente = (
+                cliente.nome
+                if cliente
+                else "Cliente não encontrado"
             )
-            with st.container(border=True):
-                a, b, c, d = st.columns(4)
-                a.markdown(f"**👤 {responsavel}**")
-                a.caption("Responsável")
-                b.metric("Clientes", len(grupo))
-                c.metric("Demandas abertas", abertas_grupo)
-                d.metric("Atrasadas", atrasadas_grupo)
 
+            prioridade = getattr(demanda, "prioridade", "")
+            prazo = getattr(demanda, "prazo", None)
+
+            st.write(
+                f"**{demanda.titulo}** — {nome_cliente}"
+            )
+
+            detalhes = []
+
+            if prioridade:
+                detalhes.append(f"Prioridade: {prioridade}")
+
+            if prazo:
+                detalhes.append(
+                    f"Prazo: {prazo.strftime('%d/%m/%Y')}"
+                )
+
+            if detalhes:
+                st.caption(" | ".join(detalhes))
+
+        if len(abertos) > 5:
+            st.caption(
+                f"Mostrando 5 de {len(abertos)} demandas abertas."
+            )
+
+    # =========================
+    # RESUMO FINAL
+    # =========================
     st.divider()
+    st.subheader("📌 Resumo")
 
-    # ---------------------------------------------------------
-    # DISTRIBUIÇÃO DAS DEMANDAS
-    # ---------------------------------------------------------
-    st.subheader("📊 Distribuição das demandas")
+    resumo1, resumo2 = st.columns(2)
 
-    col_status, col_prioridade = st.columns(2)
+    with resumo1:
+        st.write("**Clientes cadastrados:**", len(cs))
+        st.write("**Responsáveis:**", len(responsaveis))
+        st.write("**Almoxarifados:**", len(almox))
 
-    with col_status:
-        st.markdown("**Por status**")
-        total_demandas = len(demandas_dashboard)
-        for status in STATUS:
-            quantidade = sum(1 for d in demandas_dashboard if d.status == status)
-            percentual = quantidade / total_demandas * 100 if total_demandas else 0
-            st.write(f"{status}: **{quantidade}** ({percentual:.0f}%)")
-            st.progress(int(percentual))
-
-    with col_prioridade:
-        st.markdown("**Por prioridade**")
-        total_demandas = len(demandas_dashboard)
-        for prioridade in ["Alta", "Média", "Baixa"]:
-            quantidade = sum(1 for d in demandas_dashboard if d.prioridade == prioridade)
-            percentual = quantidade / total_demandas * 100 if total_demandas else 0
-            st.write(f"{prioridade}: **{quantidade}** ({percentual:.0f}%)")
-            st.progress(int(percentual))
+    with resumo2:
+        st.write("**Publicações previstas:**", total_previsto)
+        st.write("**Publicações realizadas:**", total_publicado)
+        st.write("**Publicações pendentes:**", total_pendente)
+        st.write("**Demandas abertas:**", len(abertos))
+        st.write("**Demandas concluídas:**", len(concluidas))
 
 elif pagina == "Clientes":
 	st.title("👥 Clientes")
@@ -2805,218 +2886,413 @@ elif pagina == "Relatórios":
 
 
 elif pagina == "Controle de Publicações":
-    st.title("📋 Controle de Publicações")
-    st.caption("Acompanhe publicações por cliente, relatório, período e ano.")
 
+    st.title("📋 Controle de Publicações")
+    st.caption(
+        "Acompanhe os relatórios periódicos publicados para cada cliente."
+    )
+
+    # ---------------------------------------------------------
+    # PERIODICIDADES DOS RELATÓRIOS
+    # ---------------------------------------------------------
+    # A configuração fica centralizada no início do aplicativo,
+    # mas usamos a mesma estrutura aqui para facilitar a leitura.
     periodicidades = PERIODICIDADES_PUBLICACAO
+
+    # ---------------------------------------------------------
+    # FILTROS / SELEÇÃO
+    # ---------------------------------------------------------
+    col1, col2, col3 = st.columns([3, 2, 1.5])
+
+    with col1:
+        tipo_relatorio_publicacao = st.selectbox(
+            "📄 Relatório",
+            list(periodicidades.keys()),
+            key="tipo_relatorio_publicacao",
+        )
+
+    with col2:
+        periodo_publicacao = st.selectbox(
+            "📅 Período",
+            periodicidades[tipo_relatorio_publicacao],
+            key="periodo_publicacao",
+        )
+
+    with col3:
+        ano_publicacao = st.number_input(
+            "Ano",
+            min_value=2020,
+            max_value=2100,
+            value=date.today().year,
+            step=1,
+            key="ano_publicacao",
+        )
+
+    col4, col5 = st.columns([3, 2])
+
+    with col4:
+        busca_publicacao = st.text_input(
+            "🔎 Localizar cliente",
+            placeholder="Digite o nome do cliente",
+            key="busca_publicacao",
+        )
+
+    with col5:
+        responsavel_publicacao = st.selectbox(
+            "👤 Responsável",
+            ["Todos"] + RESPONSAVEIS,
+            key="responsavel_publicacao",
+        )
+
+    # ---------------------------------------------------------
+    # CLIENTES E REGISTROS
+    # ---------------------------------------------------------
     perfil_atual = st.session_state.get("perfil_usuario", "")
     nome_usuario_atual = st.session_state.get("nome_usuario", "")
 
-    aba_lancamento, aba_resumo = st.tabs(["📝 Lançar publicação", "📊 Visão anual"])
-
-    with aba_lancamento:
-        c1, c2, c3 = st.columns([3, 2, 1.5])
-        with c1:
-            tipo_relatorio = st.selectbox("📄 Relatório", list(periodicidades), key="pub_tipo")
-        with c2:
-            periodo = st.selectbox("📅 Período", periodicidades[tipo_relatorio], key="pub_periodo")
-        with c3:
-            ano = st.number_input("Ano", min_value=2020, max_value=2100, value=date.today().year, step=1, key="pub_ano")
-
-        c4, c5 = st.columns([3, 2])
-        with c4:
-            busca = st.text_input("🔎 Localizar cliente", key="pub_busca")
-        with c5:
-            filtro_resp = st.selectbox("👤 Responsável", ["Todos"] + RESPONSAVEIS, key="pub_resp")
-
-        with SessionLocal() as db:
-            clientes_pub = db.query(Cliente).order_by(Cliente.nome.asc()).all()
-            registros = db.query(ControlePublicacao).filter(
-                ControlePublicacao.tipo_relatorio == tipo_relatorio,
-                ControlePublicacao.periodo == periodo,
-                ControlePublicacao.ano == int(ano),
-            ).all()
-
-        if perfil_atual == "Publicador":
-            clientes_pub = [c for c in clientes_pub if c.responsavel == nome_usuario_atual]
-        if filtro_resp != "Todos":
-            clientes_pub = [c for c in clientes_pub if c.responsavel == filtro_resp]
-        if busca.strip():
-            termo = busca.strip().lower()
-            clientes_pub = [c for c in clientes_pub if termo in c.nome.lower()]
-
-        registros_map = {r.cliente_id: r for r in registros}
-        publicados = sum(1 for c in clientes_pub if registros_map.get(c.id) and registros_map[c.id].publicado)
-        total = len(clientes_pub)
-        pendentes = total - publicados
-        percentual = publicados / total * 100 if total else 0
-
-        a, b, c, d = st.columns(4)
-        a.metric("👥 Clientes", total)
-        b.metric("✅ Publicados", publicados)
-        c.metric("⏳ Pendentes", pendentes)
-        d.metric("📊 Conclusão", f"{percentual:.0f}%")
-        st.progress(int(percentual), text=f"{percentual:.0f}% concluído")
-
-        st.markdown(f"### {tipo_relatorio} — {periodo} — {int(ano)}")
-
-        chave_base = f"pub_{tipo_relatorio}_{periodo}_{int(ano)}_"
-        col_a, col_b = st.columns(2)
-        with col_a:
-            if st.button("✅ Marcar todos", use_container_width=True, key="pub_marcar_todos"):
-                for cliente in clientes_pub:
-                    st.session_state[chave_base + str(cliente.id)] = True
-                st.rerun()
-        with col_b:
-            if st.button("⬜ Desmarcar todos", use_container_width=True, key="pub_desmarcar_todos"):
-                for cliente in clientes_pub:
-                    st.session_state[chave_base + str(cliente.id)] = False
-                st.rerun()
-
-        if not clientes_pub:
-            st.info("Nenhum cliente encontrado com os filtros selecionados.")
-        else:
-            headers = st.columns([0.5, 4, 2, 1, 1.6])
-            for col, title in zip(headers, ["Nº", "CLIENTE", "RESPONSÁVEL", "OK", "DATA"]):
-                with col:
-                    st.markdown(f"**{title}**")
-            st.divider()
-
-            for numero, cliente in enumerate(clientes_pub, 1):
-                registro = registros_map.get(cliente.id)
-                key_check = chave_base + str(cliente.id)
-                key_date = "data_" + key_check
-                if key_check not in st.session_state:
-                    st.session_state[key_check] = bool(registro and registro.publicado)
-                if key_date not in st.session_state:
-                    st.session_state[key_date] = registro.data_publicacao if registro and registro.data_publicacao else date.today()
-
-                cols = st.columns([0.5, 4, 2, 1, 1.6])
-                with cols[0]:
-                    st.write(numero)
-                with cols[1]:
-                    st.write(f"**{cliente.nome}**")
-                with cols[2]:
-                    st.write(cliente.responsavel)
-                with cols[3]:
-                    st.checkbox("OK", key=key_check, label_visibility="collapsed")
-                with cols[4]:
-                    if st.session_state[key_check]:
-                        st.date_input("Data", key=key_date, label_visibility="collapsed")
-                    else:
-                        st.write("—")
-
-            observacao = st.text_area(
-                "📝 Observação geral",
-                key=f"pub_obs_{tipo_relatorio}_{periodo}_{int(ano)}",
-                height=90,
-            )
-
-            if st.button("💾 Salvar marcações", type="primary", use_container_width=True, key="pub_salvar"):
-                with SessionLocal() as db:
-                    for cliente in clientes_pub:
-                        key_check = chave_base + str(cliente.id)
-                        key_date = "data_" + key_check
-                        publicado = bool(st.session_state.get(key_check, False))
-                        registro = db.query(ControlePublicacao).filter(
-                            ControlePublicacao.cliente_id == cliente.id,
-                            ControlePublicacao.tipo_relatorio == tipo_relatorio,
-                            ControlePublicacao.periodo == periodo,
-                            ControlePublicacao.ano == int(ano),
-                        ).first()
-                        if registro is None:
-                            registro = ControlePublicacao(
-                                cliente_id=cliente.id,
-                                tipo_relatorio=tipo_relatorio,
-                                periodo=periodo,
-                                ano=int(ano),
-                            )
-                            db.add(registro)
-                        registro.publicado = publicado
-                        registro.data_publicacao = st.session_state.get(key_date) if publicado else None
-                        registro.observacao = observacao.strip() or None
-                    db.commit()
-                st.success("Controle de publicações atualizado com sucesso.")
-                st.rerun()
-
-    with aba_resumo:
-        st.subheader("📊 Visão anual")
-        ano_resumo = st.number_input("Ano", min_value=2020, max_value=2100, value=date.today().year, step=1, key="pub_resumo_ano")
-        resp_resumo = st.selectbox("👤 Responsável", ["Todos"] + RESPONSAVEIS, key="pub_resumo_resp")
-        busca_resumo = st.text_input("🔎 Localizar cliente", key="pub_resumo_busca")
-
-        with SessionLocal() as db:
-            clientes_resumo = db.query(Cliente).order_by(Cliente.nome.asc()).all()
-            registros_ano = db.query(ControlePublicacao).filter(ControlePublicacao.ano == int(ano_resumo)).all()
-
-        if perfil_atual == "Publicador":
-            clientes_resumo = [c for c in clientes_resumo if c.responsavel == nome_usuario_atual]
-        if resp_resumo != "Todos":
-            clientes_resumo = [c for c in clientes_resumo if c.responsavel == resp_resumo]
-        if busca_resumo.strip():
-            termo = busca_resumo.strip().lower()
-            clientes_resumo = [c for c in clientes_resumo if termo in c.nome.lower()]
-
-        ids = {c.id for c in clientes_resumo}
-        mapa = {(r.cliente_id, r.tipo_relatorio, r.periodo): r for r in registros_ano}
-        previsto = len(clientes_resumo) * sum(len(v) for v in periodicidades.values())
-        realizado = sum(
-            1 for r in registros_ano
-            if r.cliente_id in ids and r.publicado
-            and r.tipo_relatorio in periodicidades
-            and r.periodo in periodicidades[r.tipo_relatorio]
+    with SessionLocal() as db:
+        clientes_publicacao = (
+            db.query(Cliente)
+            .order_by(Cliente.nome.asc())
+            .all()
         )
-        pct = realizado / previsto * 100 if previsto else 0
 
-        a, b, c = st.columns(3)
-        a.metric("📌 Previstas", previsto)
-        b.metric("✅ Realizadas", realizado)
-        c.metric("📊 Conclusão", f"{pct:.0f}%")
-        st.progress(int(pct), text=f"{pct:.0f}% do controle anual concluído")
-        st.divider()
-
-        if not clientes_resumo:
-            st.info("Nenhum cliente encontrado.")
-        else:
-            headers = st.columns([3.8, 1.4, 1.4, 1.4, 1.4, 1.4])
-            for col, title in zip(headers, ["CLIENTE", "RREO", "RGF", "RCI", "RGA", "BALANÇO"]):
-                with col:
-                    st.markdown(f"**{title}**")
-            st.divider()
-            tipos = list(periodicidades.keys())
-            for cliente in clientes_resumo:
-                cols = st.columns([3.8, 1.4, 1.4, 1.4, 1.4, 1.4])
-                with cols[0]:
-                    st.write(f"**{cliente.nome}**")
-                for idx, tipo in enumerate(tipos, 1):
-                    total_tipo = len(periodicidades[tipo])
-                    feitos = sum(
-                        1 for periodo_tipo in periodicidades[tipo]
-                        if (r := mapa.get((cliente.id, tipo, periodo_tipo))) and r.publicado
-                    )
-                    icone = "🟢" if feitos == total_tipo else ("🟡" if feitos else "⚪")
-                    with cols[idx]:
-                        st.write(f"{icone} {feitos}/{total_tipo}")
-
-        st.divider()
-        st.subheader("📄 Resumo por relatório")
-        for tipo, periodos in periodicidades.items():
-            total_tipo = len(clientes_resumo) * len(periodos)
-            ids_clientes = {c.id for c in clientes_resumo}
-            feitos_tipo = sum(
-                1 for r in registros_ano
-                if r.cliente_id in ids_clientes
-                and r.publicado
-                and r.tipo_relatorio == tipo
-                and r.periodo in periodos
+        registros_publicacao = (
+            db.query(ControlePublicacao)
+            .filter(
+                ControlePublicacao.tipo_relatorio
+                == tipo_relatorio_publicacao,
+                ControlePublicacao.periodo
+                == periodo_publicacao,
+                ControlePublicacao.ano
+                == int(ano_publicacao),
             )
-            pct_tipo = feitos_tipo / total_tipo * 100 if total_tipo else 0
-            with st.container(border=True):
-                x, y, z = st.columns([5, 1.5, 1.5])
-                x.markdown(f"**{tipo}**")
-                x.caption(f"{len(periodos)} período(s) por cliente")
-                y.metric("Realizadas", f"{feitos_tipo}/{total_tipo}")
-                z.metric("Conclusão", f"{pct_tipo:.0f}%")
+            .all()
+        )
+
+    # Publicadores enxergam apenas sua carteira.
+    if perfil_atual == "Publicador":
+        responsaveis_permitidos = {nome_usuario_atual}
+
+        if nome_usuario_atual == "Jadsson":
+            responsaveis_permitidos.add("Jadsson News")
+
+        clientes_publicacao = [
+            cliente
+            for cliente in clientes_publicacao
+            if cliente.responsavel in responsaveis_permitidos
+        ]
+
+    if responsavel_publicacao != "Todos":
+        clientes_publicacao = [
+            cliente
+            for cliente in clientes_publicacao
+            if cliente.responsavel == responsavel_publicacao
+        ]
+
+    if busca_publicacao.strip():
+        termo = busca_publicacao.strip().lower()
+        clientes_publicacao = [
+            cliente
+            for cliente in clientes_publicacao
+            if termo in cliente.nome.lower()
+        ]
+
+    registros_por_cliente = {
+        registro.cliente_id: registro
+        for registro in registros_publicacao
+    }
+
+    # ---------------------------------------------------------
+    # RESUMO
+    # ---------------------------------------------------------
+    total_clientes = len(clientes_publicacao)
+
+    total_publicados = sum(
+        1
+        for cliente in clientes_publicacao
+        if (
+            cliente.id in registros_por_cliente
+            and registros_por_cliente[cliente.id].publicado
+        )
+    )
+
+    total_pendentes = total_clientes - total_publicados
+
+    percentual = (
+        (total_publicados / total_clientes) * 100
+        if total_clientes
+        else 0
+    )
+
+    m1, m2, m3, m4 = st.columns(4)
+
+    m1.metric("👥 Clientes", total_clientes)
+    m2.metric("✅ Publicados", total_publicados)
+    m3.metric("⏳ Pendentes", total_pendentes)
+    m4.metric("📊 Conclusão", f"{percentual:.0f}%")
+
+    st.progress(
+        int(percentual),
+        text=f"{percentual:.0f}% concluído",
+    )
+
+    st.markdown(
+        f"### {tipo_relatorio_publicacao} — "
+        f"{periodo_publicacao} — {int(ano_publicacao)}"
+    )
+
+    st.info(
+        "Marque **OK** depois que o relatório daquele cliente "
+        "for efetivamente publicado. Depois clique em **Salvar marcações**."
+    )
+
+    # ---------------------------------------------------------
+    # AÇÕES EM MASSA
+    # ---------------------------------------------------------
+    acao1, acao2, acao3 = st.columns([1.6, 1.6, 4])
+
+    chave_base_publicacao = (
+        f"pub_{tipo_relatorio_publicacao}_"
+        f"{periodo_publicacao}_{int(ano_publicacao)}_"
+    )
+
+    with acao1:
+        marcar_todos = st.button(
+            "✅ Marcar todos",
+            use_container_width=True,
+            key="marcar_todos_publicacao",
+        )
+
+    with acao2:
+        desmarcar_todos = st.button(
+            "⬜ Desmarcar todos",
+            use_container_width=True,
+            key="desmarcar_todos_publicacao",
+        )
+
+    if marcar_todos:
+        for cliente in clientes_publicacao:
+            st.session_state[
+                chave_base_publicacao + str(cliente.id)
+            ] = True
+
+    if desmarcar_todos:
+        for cliente in clientes_publicacao:
+            st.session_state[
+                chave_base_publicacao + str(cliente.id)
+            ] = False
+
+    # ---------------------------------------------------------
+    # TABELA
+    # ---------------------------------------------------------
+    st.divider()
+
+    if not clientes_publicacao:
+        st.warning(
+            "Nenhum cliente encontrado com os filtros selecionados."
+        )
+    else:
+        larguras_publicacao = [0.45, 4.2, 2.0, 1.0, 1.5]
+
+        cabecalho = st.columns(larguras_publicacao)
+
+        cabecalhos_publicacao = [
+            "Nº",
+            "CLIENTE",
+            "RESPONSÁVEL",
+            "OK",
+            "DATA",
+        ]
+
+        for coluna, titulo in zip(
+            cabecalho,
+            cabecalhos_publicacao,
+        ):
+            with coluna:
+                st.markdown(
+                    f'<div class="publicacao-header">{titulo}</div>',
+                    unsafe_allow_html=True,
+                )
+
+        for numero, cliente in enumerate(
+            clientes_publicacao,
+            start=1,
+        ):
+            registro = registros_por_cliente.get(cliente.id)
+
+            valor_banco = bool(
+                registro and registro.publicado
+            )
+
+            chave_checkbox = (
+                chave_base_publicacao + str(cliente.id)
+            )
+
+            if chave_checkbox not in st.session_state:
+                st.session_state[chave_checkbox] = valor_banco
+
+            linha = st.columns(larguras_publicacao)
+
+            with linha[0]:
+                st.markdown(
+                    f'<div class="publicacao-cell numero">{numero}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            with linha[1]:
+                st.markdown(
+                    f'<div class="publicacao-cell cliente">{cliente.nome}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            with linha[2]:
+                st.markdown(
+                    f'<div class="publicacao-cell">{cliente.responsavel}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            with linha[3]:
+                st.checkbox(
+                    "OK",
+                    key=chave_checkbox,
+                    label_visibility="collapsed",
+                )
+
+            with linha[4]:
+                if registro and registro.publicado:
+                    data_texto = (
+                        registro.data_publicacao.strftime("%d/%m/%Y")
+                        if registro.data_publicacao
+                        else "—"
+                    )
+                    st.markdown(
+                        f'<div class="publicacao-cell">{data_texto}</div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        '<div class="publicacao-cell">—</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        st.divider()
+
+        salvar_publicacoes = st.button(
+            "💾 Salvar marcações",
+            type="primary",
+            use_container_width=True,
+            key="salvar_controle_publicacoes",
+        )
+
+        if salvar_publicacoes:
+            data_atual = date.today()
+
+            with SessionLocal() as db:
+                salvos = 0
+
+                for cliente in clientes_publicacao:
+                    chave_checkbox = (
+                        chave_base_publicacao
+                        + str(cliente.id)
+                    )
+
+                    publicado = bool(
+                        st.session_state.get(
+                            chave_checkbox,
+                            False,
+                        )
+                    )
+
+                    registro = (
+                        db.query(ControlePublicacao)
+                        .filter(
+                            ControlePublicacao.cliente_id
+                            == cliente.id,
+                            ControlePublicacao.tipo_relatorio
+                            == tipo_relatorio_publicacao,
+                            ControlePublicacao.periodo
+                            == periodo_publicacao,
+                            ControlePublicacao.ano
+                            == int(ano_publicacao),
+                        )
+                        .first()
+                    )
+
+                    if registro is None:
+                        registro = ControlePublicacao(
+                            cliente_id=cliente.id,
+                            tipo_relatorio=tipo_relatorio_publicacao,
+                            periodo=periodo_publicacao,
+                            ano=int(ano_publicacao),
+                            publicado=publicado,
+                            data_publicacao=(
+                                data_atual
+                                if publicado
+                                else None
+                            ),
+                        )
+                        db.add(registro)
+
+                    else:
+                        registro.publicado = publicado
+
+                        if publicado:
+                            # Mantém a data original quando já publicada.
+                            if not registro.data_publicacao:
+                                registro.data_publicacao = data_atual
+                        else:
+                            registro.data_publicacao = None
+
+                    salvos += 1
+
+                db.commit()
+
+            st.success(
+                f"✅ Controle atualizado para {salvos} cliente(s)."
+            )
+            st.rerun()
+
+        # -----------------------------------------------------
+        # SITUAÇÃO ATUAL
+        # -----------------------------------------------------
+        st.divider()
+        st.subheader("📌 Situação atual")
+
+        situacao1, situacao2 = st.columns(2)
+
+        with situacao1:
+            if total_publicados:
+                st.success(
+                    f"✅ {total_publicados} cliente(s) com publicação concluída."
+                )
+            else:
+                st.info("Nenhuma publicação marcada como concluída.")
+
+        with situacao2:
+            if total_pendentes:
+                st.warning(
+                    f"⏳ {total_pendentes} cliente(s) ainda pendente(s)."
+                )
+            else:
+                st.success(
+                    "🎉 Todos os clientes deste filtro estão publicados."
+                )
+
+        for cliente in clientes_publicacao:
+            registro = registros_por_cliente.get(cliente.id)
+
+            if registro and registro.publicado:
+                data_texto = (
+                    registro.data_publicacao.strftime("%d/%m/%Y")
+                    if registro.data_publicacao
+                    else "Data não informada"
+                )
+
+                st.success(
+                    f"✅ {cliente.nome} — publicado em {data_texto}"
+                )
+
 
 elif pagina == "Almoxarifados":
 
@@ -3063,6 +3339,15 @@ elif pagina == "Almoxarifados":
             font-weight:700;
             color:#166534 !important;
             background:#dcfce7;
+        }
+
+        div[data-testid="stCheckbox"] {
+            display:flex;
+            justify-content:center;
+        }
+
+        div[data-testid="stCheckbox"] label {
+            justify-content:center;
         }
         </style>
         """,
@@ -3243,30 +3528,36 @@ elif pagina == "Almoxarifados":
                     unsafe_allow_html=True,
                 )
 
+            def alternar_mes_almox(id_registro, campo):
+                with SessionLocal() as db:
+                    registro = (
+                        db.query(Almoxarifado)
+                        .filter(Almoxarifado.id == id_registro)
+                        .first()
+                    )
+
+                    if registro:
+                        valor_atual = getattr(registro, campo) or ""
+                        setattr(
+                            registro,
+                            campo,
+                            "" if valor_atual == "Ok" else "Ok",
+                        )
+                        db.commit()
+
             for pos, (campo, mes) in enumerate(MESES_ALMOXARIFADO, start=4):
 
                 valor = getattr(item, campo) or ""
 
                 with cols[pos]:
-                    if st.button(
-                        "OK" if valor == "Ok" else "·",
-                        key=f"almox_{item.id}_{campo}",
-                        use_container_width=True,
-                    ):
-                        with SessionLocal() as db:
-                            registro = (
-                                db.query(Almoxarifado)
-                                .filter(Almoxarifado.id == item.id)
-                                .first()
-                            )
-                            if registro:
-                                setattr(
-                                    registro,
-                                    campo,
-                                    "" if getattr(registro, campo) == "Ok" else "Ok",
-                                )
-                                db.commit()
-                        st.rerun()
+                    st.checkbox(
+                        "OK",
+                        value=(valor == "Ok"),
+                        key=f"chk_almox_{item.id}_{campo}",
+                        label_visibility="collapsed",
+                        on_change=alternar_mes_almox,
+                        args=(item.id, campo),
+                    )
 
             with st.expander(f"⚙️ Editar {item.cliente}"):
 
@@ -3426,5 +3717,6 @@ elif pagina == "Configurações":
     st.divider()
 
     st.write("**Sistema:** Facilita Manager")
-    st.write("**Tecnologia:** Python + Streamlit + SQLAlchemy + SQLite")
-    st.write("**Versão:** 0.3.0")
+    st.write("**Tecnologia:** Python + Streamlit + SQLAlchemy + Supabase")
+    st.write("**Versão:** 0.2.0")
+
