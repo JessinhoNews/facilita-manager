@@ -331,7 +331,21 @@ def tela_login():
                 st.error(
                     "Usuário ou senha incorretos."
                 )
-engine = create_engine("sqlite:///facilita.db", connect_args={"check_same_thread": False})
+# Banco de dados persistente no Supabase/PostgreSQL
+DATABASE_URL = st.secrets.get("DATABASE_URL")
+
+if not DATABASE_URL:
+    st.error("DATABASE_URL não está configurado nos Secrets do Streamlit.")
+    st.stop()
+
+# Compatibilidade caso a URL venha como postgres://
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+)
 Base = declarative_base()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
