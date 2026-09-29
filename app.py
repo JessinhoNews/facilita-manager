@@ -2,7 +2,7 @@ from pathlib import Path
 from io import BytesIO
 import streamlit as st
 from datetime import date
-from sqlalchemy import create_engine, Column, Integer, String, Text, Date, ForeignKey, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Text, Date, ForeignKey, Boolean, UniqueConstraint
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 st.set_page_config(page_title="Facilita Manager", page_icon="🏛️", layout="wide")
@@ -450,6 +450,28 @@ class RelatorioAvaliacao(Base):
     serie_historica = Column(String(50))
 
     observacoes = Column(Text)
+
+
+class ControleEnvioPrestacaoServico(Base):
+    """Controle mensal de envio do Relatório de Prestação de Serviços."""
+
+    __tablename__ = "controle_envio_prestacao_servicos"
+
+    id = Column(Integer, primary_key=True)
+    cliente_id = Column(Integer, ForeignKey("clientes.id"), nullable=False)
+    mes_referencia = Column(String(7), nullable=False)
+    enviado = Column(Boolean, default=False, nullable=False)
+    data_envio = Column(Date, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "cliente_id",
+            "mes_referencia",
+            name="uq_controle_envio_prestacao_servico",
+        ),
+    )
+
+
 # =========================================================
 # CONTROLE DE PUBLICAÇÕES
 # =========================================================
@@ -688,7 +710,7 @@ pagina = st.sidebar.radio(
         "Demandas",
         "Kanban",
         "Carteiras",
-        "Relatórios",
+        "Relatórios de Prestação de Serviços",
         "Controle de Publicações",
         "Almoxarifados",
         "Configurações",
@@ -711,6 +733,152 @@ if st.sidebar.button("🚪 Sair", use_container_width=True):
     st.session_state.pop("perfil_usuario", None)
     st.rerun()
   
+
+
+def gerar_pdf_controle_publicacao(
+    tipo_relatorio,
+    periodo,
+    ano,
+    clientes,
+    registros_por_cliente,
+):
+    """Gera PDF do controle de publicações para o período selecionado."""
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=1.0 * cm,
+        leftMargin=1.0 * cm,
+        topMargin=1.0 * cm,
+        bottomMargin=1.0 * cm,
+    )
+
+    styles = getSampleStyleSheet()
+    titulo = ParagraphStyle(
+        "TituloControlePublicacao",
+        parent=styles["Title"],
+        alignment=TA_CENTER,
+        fontSize=17,
+        leading=21,
+        spaceAfter=6,
+    )
+    subtitulo = ParagraphStyle(
+        "SubtituloControlePublicacao",
+        parent=styles["Normal"],
+        alignment=TA_CENTER,
+        fontSize=10,
+        leading=13,
+        spaceAfter=12,
+    )
+    texto = ParagraphStyle(
+        "TextoControlePublicacao",
+        parent=styles["Normal"],
+        fontSize=8.5,
+        leading=10,
+    )
+
+    publicados = sum(
+        1
+        for cliente in clientes
+        if cliente.id in registros_por_cliente
+        and registros_por_cliente[cliente.id].publicado
+    )
+    pendentes = len(clientes) - publicados
+    percentual = (publicados / len(clientes) * 100) if clientes else 0
+
+    # Logo da empresa no cabeçalho do PDF.
+    # A aplicação já utiliza esta mesma marca em assets/logo-facilita.png.
+    base_dir = Path(__file__).resolve().parent
+    logo_path = base_dir / "assets" / "logo-facilita.png"
+
+    cabecalho = []
+    if logo_path.exists():
+        logo = Image(str(logo_path))
+        # Mantém a proporção e limita o tamanho para não ocupar a tabela.
+        logo.drawHeight = 1.35 * cm
+        logo.drawWidth = 4.8 * cm
+        cabecalho.append(logo)
+        cabecalho.append(Spacer(1, 0.15 * cm))
+
+    cabecalho.extend([
+        Paragraph("FACILITA MANAGER", titulo),
+        Paragraph(
+            f"Controle de Publicações — {tipo_relatorio} — {periodo} — {int(ano)}",
+            subtitulo,
+        ),
+    ])
+
+    story = [
+        KeepTogether(cabecalho),
+        Paragraph(
+            f"Total de clientes: <b>{len(clientes)}</b> &nbsp;&nbsp; "
+            f"Publicados: <b>{publicados}</b> &nbsp;&nbsp; "
+            f"Pendentes: <b>{pendentes}</b> &nbsp;&nbsp; "
+            f"Conclusão: <b>{percentual:.0f}%</b>",
+            texto,
+        ),
+        Spacer(1, 0.35 * cm),
+    ]
+
+    dados = [[
+        Paragraph("Nº", texto),
+        Paragraph("CLIENTE", texto),
+        Paragraph("RESPONSÁVEL", texto),
+        Paragraph("STATUS", texto),
+        Paragraph("DATA DA PUBLICAÇÃO", texto),
+    ]]
+
+    for numero, cliente in enumerate(clientes, start=1):
+        registro = registros_por_cliente.get(cliente.id)
+        publicado = bool(registro and registro.publicado)
+        status = "PUBLICADO" if publicado else "PENDENTE"
+        data_publicacao = (
+            registro.data_publicacao.strftime("%d/%m/%Y")
+            if publicado and registro.data_publicacao
+            else "—"
+        )
+        dados.append([
+            Paragraph(str(numero), texto),
+            Paragraph(str(cliente.nome or ""), texto),
+            Paragraph(str(cliente.responsavel or ""), texto),
+            Paragraph(status, texto),
+            Paragraph(data_publicacao, texto),
+        ])
+
+    tabela = Table(
+        dados,
+        colWidths=[1.0 * cm, 8.7 * cm, 5.0 * cm, 3.2 * cm, 4.2 * cm],
+        repeatRows=1,
+    )
+    tabela.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#d9e2f3")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#092b72")),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#b7b7b7")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (0, 0), (0, -1), "CENTER"),
+        ("ALIGN", (3, 1), (4, -1), "CENTER"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f7f9fc")]),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+
+    story.append(tabela)
+    story.append(Spacer(1, 0.35 * cm))
+    story.append(Paragraph(
+        "Documento gerado pelo Facilita Manager. A situação apresentada corresponde aos registros do período selecionado no momento da exportação.",
+        texto,
+    ))
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 if pagina == "Dashboard":
     cs, ds = clientes(), demandas()
@@ -775,7 +943,7 @@ if pagina == "Dashboard":
     total_pendente = max(total_previsto - total_publicado, 0)
 
     # =========================
-    # RELATÓRIOS DE AVALIAÇÃO
+    # RELATÓRIOS DE PRESTAÇÃO DE SERVIÇOS
     # =========================
     avaliacoes = []
     try:
@@ -822,7 +990,7 @@ if pagina == "Dashboard":
     col5, col6, col7, col8 = st.columns(4)
 
     with col5:
-        st.metric("📄 Avaliações", len(avaliacoes))
+        st.metric("📄 Relatórios de Prestação de Serviços", len(avaliacoes))
 
     with col6:
         st.metric("📦 Almoxarifados", len(almox))
@@ -1366,9 +1534,9 @@ elif pagina == "Carteiras":
                 )
 
 
-elif pagina == "Relatórios":
+elif pagina == "Relatórios de Prestação de Serviços":
 
-    st.title("📈 Relatórios de Avaliação")
+    st.title("📈 Relatórios de Prestação de Serviços")
 
     # =========================================================
     # FUNÇÃO PARA GERAR PDF
@@ -1718,7 +1886,7 @@ elif pagina == "Relatórios":
     # RELATÓRIOS SALVOS
     # =========================================================
 
-    st.subheader("🗂️ Relatórios realizados")
+    st.subheader("🗂️ Relatórios de Prestação de Serviços")
 
     with SessionLocal() as db:
 
@@ -1736,6 +1904,16 @@ elif pagina == "Relatórios":
             .distinct()
             .all()
         )
+
+        controles_envio = (
+            db.query(ControleEnvioPrestacaoServico)
+            .all()
+        )
+
+    envios_map = {
+        (registro.cliente_id, registro.mes_referencia): registro
+        for registro in controles_envio
+    }
 
     nomes_clientes = {
         cliente.id: cliente.nome
@@ -1818,7 +1996,24 @@ elif pagina == "Relatórios":
             )
         )
 
+    total_relatorios = len(relatorios_filtrados)
+    total_enviados = sum(
+        1
+        for cliente_id, mes, _ in relatorios_filtrados
+        if (cliente_id, mes) in envios_map
+        and envios_map[(cliente_id, mes)].enviado
+    )
+    total_pendentes = total_relatorios - total_enviados
+
     st.divider()
+
+    met1, met2, met3 = st.columns(3)
+    with met1:
+        st.metric("📄 Relatórios", total_relatorios)
+    with met2:
+        st.metric("✅ Enviados", total_enviados)
+    with met3:
+        st.metric("⏳ Pendentes", total_pendentes)
 
     st.write(
         f"**{len(relatorios_filtrados)} "
@@ -1828,6 +2023,23 @@ elif pagina == "Relatórios":
     # =========================================================
     # LISTAGEM
     # =========================================================
+
+    if relatorios_filtrados:
+        cab1, cab2, cab3, cab4, cab5, cab6 = st.columns(
+            [3.4, 1.4, 1.4, 1.3, 1.3, 0.55]
+        )
+        with cab1:
+            st.caption("**Cliente / mês**")
+        with cab2:
+            st.caption("**Relatório salvo**")
+        with cab3:
+            st.caption("**Abrir**")
+        with cab4:
+            st.caption("**Editar**")
+        with cab5:
+            st.caption("**Excluir**")
+        with cab6:
+            st.caption("**☑**")
 
     if not relatorios_filtrados:
 
@@ -1846,8 +2058,8 @@ elif pagina == "Relatórios":
 
             with st.container(border=True):
 
-                col1, col2, col3, col4, col5 = st.columns(
-                    [4, 1.5, 1.4, 1.4, 1.4]
+                col1, col2, col3, col4, col5, col6 = st.columns(
+                    [3.4, 1.4, 1.4, 1.3, 1.3, 0.55]
                 )
 
                 with col1:
@@ -1861,10 +2073,17 @@ elif pagina == "Relatórios":
                     )
 
                 # =================================================
-                # ABRIR
+                # RELATÓRIO SALVO
                 # =================================================
 
                 with col2:
+                    st.success("✅ Salvo", icon="📄")
+
+                # =================================================
+                # ABRIR
+                # =================================================
+
+                with col3:
 
                     if st.button(
                         "👁️ Abrir",
@@ -1899,7 +2118,7 @@ elif pagina == "Relatórios":
                 # EDITAR
                 # =================================================
 
-                with col3:
+                with col4:
 
                     if st.button(
                         "✏️ Editar",
@@ -1930,11 +2149,67 @@ elif pagina == "Relatórios":
 
                         st.rerun()
 
+
+                # =================================================
+                # CONTROLE DE ENVIO — COLUNA INDEPENDENTE
+                # =================================================
+
+                with col6:
+
+                    registro_envio = envios_map.get(
+                        (cliente_id, mes)
+                    )
+                    enviado_atual = bool(
+                        registro_envio
+                        and registro_envio.enviado
+                    )
+
+                    enviado = st.checkbox(
+                        "",
+                        value=enviado_atual,
+                        key=(
+                            f"enviado_relatorio_"
+                            f"{cliente_id}_{mes}"
+                        ),
+                    )
+
+                    if enviado != enviado_atual:
+                        with SessionLocal() as db:
+                            registro = (
+                                db.query(
+                                    ControleEnvioPrestacaoServico
+                                )
+                                .filter(
+                                    ControleEnvioPrestacaoServico.cliente_id
+                                    == cliente_id,
+                                    ControleEnvioPrestacaoServico.mes_referencia
+                                    == mes,
+                                )
+                                .first()
+                            )
+
+                            if registro is None:
+                                registro = (
+                                    ControleEnvioPrestacaoServico(
+                                        cliente_id=cliente_id,
+                                        mes_referencia=mes,
+                                    )
+                                )
+                                db.add(registro)
+
+                            registro.enviado = enviado
+                            registro.data_envio = (
+                                date.today() if enviado else None
+                            )
+                            db.commit()
+
+                        st.rerun()
+
                 # =================================================
                 # EXCLUIR
                 # =================================================
 
-                with col4:
+                with col5:
 
                     if st.button(
                         "🗑️ Excluir",
@@ -1953,6 +2228,17 @@ elif pagina == "Relatórios":
                                 RelatorioAvaliacao.cliente_id
                                 == cliente_id,
                                 RelatorioAvaliacao.mes_referencia
+                                == mes,
+                            ).delete(
+                                synchronize_session=False
+                            )
+
+                            db.query(
+                                ControleEnvioPrestacaoServico
+                            ).filter(
+                                ControleEnvioPrestacaoServico.cliente_id
+                                == cliente_id,
+                                ControleEnvioPrestacaoServico.mes_referencia
                                 == mes,
                             ).delete(
                                 synchronize_session=False
@@ -2555,7 +2841,7 @@ elif pagina == "Relatórios":
             st.divider()
 
             st.subheader(
-                "📝 Itens avaliativos"
+                "📝 Itens do Relatório de Prestação de Serviços"
             )
 
             st.caption(
@@ -2761,7 +3047,7 @@ elif pagina == "Relatórios":
             texto_botao = (
                 "💾 Atualizar relatório"
                 if cliente_editar
-                else "💾 Salvar avaliação"
+                else "💾 Salvar relatório"
             )
 
             if st.button(
@@ -3252,6 +3538,40 @@ elif pagina == "Controle de Publicações":
                 f"✅ Controle atualizado para {salvos} cliente(s)."
             )
             st.rerun()
+
+        # -----------------------------------------------------
+        # EXPORTAÇÃO DO PERÍODO EM PDF
+        # -----------------------------------------------------
+        st.divider()
+        st.subheader("📄 Exportar relatório do período")
+
+        pdf_controle = gerar_pdf_controle_publicacao(
+            tipo_relatorio_publicacao,
+            periodo_publicacao,
+            int(ano_publicacao),
+            clientes_publicacao,
+            registros_por_cliente,
+        )
+
+        nome_pdf_controle = (
+            f"Controle_Publicacoes_{tipo_relatorio_publicacao}_"
+            f"{periodo_publicacao}_{int(ano_publicacao)}"
+            .replace(" ", "_")
+            .replace("/", "-")
+            .replace("—", "-")
+        )
+
+        st.download_button(
+            "📥 Baixar PDF deste período",
+            data=pdf_controle,
+            file_name=f"{nome_pdf_controle}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            key=(
+                f"pdf_controle_publicacao_"
+                f"{tipo_relatorio_publicacao}_{periodo_publicacao}_{int(ano_publicacao)}"
+            ),
+        )
 
         # -----------------------------------------------------
         # SITUAÇÃO ATUAL
